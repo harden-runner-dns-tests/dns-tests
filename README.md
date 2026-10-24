@@ -72,3 +72,23 @@ The remaining api.github.com failure is a different path: GitHub's resolver retu
 Conclusion: deletion is a demonstrated partial mitigation for the DNS configuration conflict in this setup, not complete compatibility with the active proxy. It still requires validation against the live deployment, including whether GitHub recreates the file and how cleanup restores prior configuration. A StepSecurity-owned later override is easier to manage and reverse than deleting another component's file.
 
 To avoid the previous stalled-run problem, this follow-up inserts unconditional IPv4 ACCEPT rules only **after** all DNS snapshots, probes, and journal capture. That recovery restores runner/artifact connectivity and is not part of the tested mitigation. The table and `verdict.json` describe only measurements before recovery. A green diagnostic job still does not mean all allowed hosts passed.
+
+## Combined DNS/proxy revert: October 24 follow-up
+
+[Run 40106957882](https://github.com/harden-runner-dns-tests/dns-tests/actions/runs/40106957882) completed six jobs comparing unchanged proxy setup, drop-in deletion, and a combined revert. Both combined-revert jobs passed every measured allowed-host request while continuing to block the unlisted host.
+
+The new `scripts/revert-github-dns.sh` runs as root in the preparation pre-step, before the unchanged Community action. It backs up the observed resolver state, stops `egress-dns-resolver.service` and `egress-outbound-proxy.service`, removes `90-egress-proxy.conf`, restarts systemd-resolved, restores `/etc/resolv.conf` as a symlink to `/run/systemd/resolve/stub-resolv.conf`, and flushes the resolver cache. It leaves installed binaries in place. This reverses the networking changes observed here, not every possible change GitHub may make to a runner.
+
+| Setup (two samples each) | github.com | proxy.golang.org | api.github.com | Unlisted example.com |
+| --- | --- | --- | --- | --- |
+| Keep GitHub DNS/proxy configuration | Failed | Failed | Failed | Blocked |
+| Delete only the drop-in | Passed | Passed | Failed | Blocked |
+| Combined revert | Passed | Passed | Passed | Blocked |
+
+Every host was requested three times immediately after hardening and three more times after a 30-second delay. Across both combined-revert jobs: 36/36 allowed requests succeeded, and 12/12 unlisted-host requests were blocked. The DNS snapshots still showed `nameserver 127.0.0.53` in resolv.conf and `DNS=127.0.0.1` in resolved.conf after the delay. Logs confirmed `AgentType:agent-oss`. Neither successful job needed the post-measurement firewall recovery step; it was skipped.
+
+Successful jobs: [eastus](https://github.com/harden-runner-dns-tests/dns-tests/actions/runs/40106957882/job/120910530473), [northcentralus](https://github.com/harden-runner-dns-tests/dns-tests/actions/runs/40106957882/job/120910530174).
+
+Scope: both successful samples used HCA `20261012.601` and the explicitly recreated clearing drop-in after running James's script. Neither was a live westus2 experiment host. The controls used newer HCA `20261021.618` and script-created drop-ins. VMs were independently allocated. These results establish that the combined revert restores the tested Community behavior in the constructed setup; they do not establish coverage for all images, containers, longer jobs, or future reapplication by GitHub.
+
+Re-run using **Actions → Test reverting GitHub DNS and proxy setup → Run workflow** (`full-revert.yml`). The full-revert cases explicitly fail if the pre-recovery allowed/denied checks fail. This is test-repository code, not a change to the released Community agent, and no automatic cleanup integration for a production workaround is claimed.
