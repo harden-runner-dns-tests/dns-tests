@@ -47,3 +47,28 @@ Use **Actions → DNS reproduction comparison → Run workflow**. This schedules
 1. Can GitHub provide a versioned reproduction environment or identify the expected binary hashes and HCA behavior, including whether repoint should create the DNS-clearing drop-in?
 2. What should the reproduction procedure do when the binaries are absent or the services are already running?
 3. Can the experiment be paused/reverted on affected hosts while DNS interception and proxy-backend compatibility are resolved?
+
+## Deleting the drop-in before Harden-Runner: October 24 follow-up
+
+[Workflow run 40106478450](https://github.com/harden-runner-dns-tests/dns-tests/actions/runs/40106478450) completed all four jobs. The workflow is `dropin-deletion.yml`.
+
+| Setup | github.com | proxy.golang.org | api.github.com | Unlisted example.com |
+| --- | --- | --- | --- | --- |
+| Retain drop-in, two samples | One sample passed, one failed | Both failed | Both failed | Both blocked |
+| Delete drop-in before Harden-Runner pre-step, two samples | Both passed | Both passed | Both failed | Both blocked |
+
+Each host was probed three times; all three results agreed within each job. The jobs ran on separate randomly assigned VMs, so this is a comparison across samples rather than an identical-host crossover experiment.
+
+One control and one deletion job used the drop-in created by the installed resolver when running James's script. The other pair explicitly created the observed `[Resolve]` / empty `DNS=` file because their older resolver did not create it; artifacts label these as synthetic fixtures. All four used James's active proxy setup. None of these four jobs landed in westus2.
+
+Deletion jobs: [centralus, script-created drop-in](https://github.com/harden-runner-dns-tests/dns-tests/actions/runs/40106478450/job/120909114817), [eastus, synthetic drop-in](https://github.com/harden-runner-dns-tests/dns-tests/actions/runs/40106478450/job/120909114942).
+
+Control jobs: [centralus, script-created drop-in](https://github.com/harden-runner-dns-tests/dns-tests/actions/runs/40106478450/job/120909114902), [westcentralus, synthetic drop-in](https://github.com/harden-runner-dns-tests/dns-tests/actions/runs/40106478450/job/120909114905).
+
+After deletion, Harden-Runner's existing restart applied `DNS=127.0.0.1`; the file was not recreated during the measured interval. `/etc/resolv.conf` still pointed first to GitHub's resolver. For non-intercepted names, the script's resolver forwards to `127.0.0.53`, allowing those requests to reach StepSecurity once resolved is correctly configured.
+
+The remaining api.github.com failure is a different path: GitHub's resolver returns its local proxy address, and outbound-proxy connects to `20.29.134.25:443`. Both deletion jobs logged that backend IP being dropped. The proxy journal recorded connection refusal and curl reported exit 35. Deleting the DNS drop-in does not authorize the backend connection.
+
+Conclusion: deletion is a demonstrated partial mitigation for the DNS configuration conflict in this setup, not complete compatibility with the active proxy. It still requires validation against the live deployment, including whether GitHub recreates the file and how cleanup restores prior configuration. A StepSecurity-owned later override is easier to manage and reverse than deleting another component's file.
+
+To avoid the previous stalled-run problem, this follow-up inserts unconditional IPv4 ACCEPT rules only **after** all DNS snapshots, probes, and journal capture. That recovery restores runner/artifact connectivity and is not part of the tested mitigation. The table and `verdict.json` describe only measurements before recovery. A green diagnostic job still does not mean all allowed hosts passed.
