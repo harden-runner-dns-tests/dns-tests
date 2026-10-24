@@ -4,7 +4,7 @@ const path = require('node:path');
 const dir = path.join(process.env.RUNNER_TEMP, 'dns-repro');
 fs.mkdirSync(path.join(dir, 'evidence'), { recursive: true });
 // Fetch only this run's committed test scripts; checkout has not executed yet.
-for (const file of ['snapshot.sh', 'probe.sh', 'james-repro.sh']) {
+for (const file of ['snapshot.sh', 'probe.sh', 'james-repro.sh', 'revert-github-dns.sh']) {
   execFileSync('curl', ['-fsSL', '--retry', '2', '--max-time', '30',
     `https://raw.githubusercontent.com/${process.env.GITHUB_REPOSITORY}/${process.env.GITHUB_SHA}/scripts/${file}`,
     '-o', path.join(dir, file)], { stdio: 'inherit' });
@@ -13,7 +13,7 @@ execFileSync('bash', ['-c', `
   set -o pipefail
   bash snapshot.sh before |& tee evidence/before.txt
   bash probe.sh before |& tee evidence/probe-before.txt
-  if [ "$DNS_TEST_SETUP" = james-script ] || [ "$DNS_TEST_SETUP" = dropin-control ] || [ "$DNS_TEST_SETUP" = dropin-delete ]; then
+  if [ "$DNS_TEST_SETUP" = james-script ] || [ "$DNS_TEST_SETUP" = dropin-control ] || [ "$DNS_TEST_SETUP" = dropin-delete ] || [ "$DNS_TEST_SETUP" = dropin-revert ]; then
     sudo bash james-repro.sh > evidence/james-script.txt 2>&1
     rc=$?
     cat evidence/james-script.txt
@@ -39,6 +39,10 @@ execFileSync('bash', ['-c', `
     if [ "$DNS_TEST_SETUP" = dropin-delete ]; then
       sudo rm /etc/systemd/resolved.conf.d/90-egress-proxy.conf
       echo 'Removed drop-in; no resolver restart here. Harden-Runner will restart resolved.' | tee -a evidence/fixture.txt
+    fi
+    if [ "$DNS_TEST_SETUP" = dropin-revert ]; then
+      sudo bash revert-github-dns.sh "$PWD/evidence/revert-backup" |& tee evidence/revert.txt
+      if [ "\${PIPESTATUS[0]}" -ne 0 ]; then exit 1; fi
     fi
     bash snapshot.sh before-harden |& tee evidence/before-harden.txt
   fi
