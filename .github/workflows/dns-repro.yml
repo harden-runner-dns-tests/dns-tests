@@ -19,7 +19,6 @@ jobs:
         uses: harden-runner-dns-tests/dns-tests/.github/actions/prepare@main
         env:
           DNS_TEST_SETUP: ${{ matrix.setup }}
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Recover pre-step evidence
         if: always()
         run: cp -a "$RUNNER_TEMP/dns-repro/evidence" ./evidence
@@ -36,8 +35,8 @@ jobs:
       - name: Capture DNS and probe allowed and denied traffic
         if: always()
         run: |
-          bash scripts/snapshot.sh after-harden |& tee evidence/after-harden.txt
-          bash scripts/probe.sh after-harden |& tee evidence/probe-after-harden.txt
+          bash "$RUNNER_TEMP/dns-repro/snapshot.sh" after-harden |& tee evidence/after-harden.txt
+          bash "$RUNNER_TEMP/dns-repro/probe.sh" after-harden |& tee evidence/probe-after-harden.txt
           sudo journalctl -u agent.service --no-pager > evidence/agent-journal.txt
           sudo journalctl -u egress-outbound-proxy -u egress-dns-resolver --no-pager > evidence/proxy-journal.txt
           {

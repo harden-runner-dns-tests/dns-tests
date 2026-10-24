@@ -4,6 +4,7 @@ echo "timestamp=$(date -u +%FT%TZ) stage=$1"
 printf 'ImageOS=%s ImageVersion=%s\n' "$ImageOS" "$ImageVersion"
 cat /etc/os-release
 ls -l /etc/resolv.conf /opt/hca/outbound-proxy /opt/hca/dns-resolver
+sha256sum /opt/hca/outbound-proxy /opt/hca/dns-resolver
 cat /etc/resolv.conf
 sudo systemd-analyze cat-config systemd/resolved.conf
 resolvectl status
