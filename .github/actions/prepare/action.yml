@@ -1,0 +1,6 @@
+name: Prepare DNS experiment before hardening
+description: Capture native DNS and optionally execute the original reproduction script before the Harden-Runner pre-step.
+runs:
+  using: node24
+  pre: prepare.js
+  main: main.js

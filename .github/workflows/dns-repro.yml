@@ -1,0 +1,58 @@
+name: DNS reproduction comparison
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare:
+    name: ${{ matrix.os }} / ${{ matrix.setup }} / sample ${{ matrix.sample }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-26.04]
+        setup: [native, james-script]
+        sample: [1, 2]
+    steps:
+      - name: Configure and inspect DNS before Harden-Runner's pre-step
+        uses: harden-runner-dns-tests/dns-tests/.github/actions/prepare@main
+        env:
+          DNS_TEST_SETUP: ${{ matrix.setup }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Recover pre-step evidence
+        if: always()
+        run: cp -a "$RUNNER_TEMP/dns-repro/evidence" ./evidence
+      - name: Harden Runner Community block mode
+        id: harden
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2
+        with:
+          egress-policy: block
+          allowed-endpoints: >-
+            github.com:443
+            api.github.com:443
+            proxy.golang.org:443
+          disable-sudo: false
+      - name: Capture DNS and probe allowed and denied traffic
+        if: always()
+        run: |
+          bash scripts/snapshot.sh after-harden |& tee evidence/after-harden.txt
+          bash scripts/probe.sh after-harden |& tee evidence/probe-after-harden.txt
+          sudo journalctl -u agent.service --no-pager > evidence/agent-journal.txt
+          sudo journalctl -u egress-outbound-proxy -u egress-dns-resolver --no-pager > evidence/proxy-journal.txt
+          {
+            echo '### DNS reproduction evidence'
+            echo 'Harden step outcome: ${{ steps.harden.outcome }}'
+            echo 'Diagnostic completion does not mean compatibility passed. See each curl exit code.'
+            echo 'github.com, api.github.com, proxy.golang.org are allowed; example.com is deliberately denied.'
+            echo '```text'
+            cat evidence/results.tsv
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dns-${{ matrix.os }}-${{ matrix.setup }}-${{ matrix.sample }}
+          path: evidence/
+          retention-days: 14
