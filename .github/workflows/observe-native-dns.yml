@@ -1,0 +1,61 @@
+name: Observe native runner DNS rollout
+on:
+  workflow_dispatch:
+    inputs:
+      samples:
+        description: JSON sample identifiers per image
+        default: '[1,2,3,4,5,6,7,8]'
+        required: true
+permissions:
+  contents: read
+jobs:
+  observe:
+    name: ${{ matrix.os }} / sample ${{ matrix.sample }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-26.04]
+        sample: ${{ fromJSON(inputs.samples) }}
+    steps:
+      - name: Read original DNS and proxy state without modifying it
+        shell: bash
+        run: |
+          mkdir -p evidence
+          python3 - <<'PY'
+          import subprocess, json, os, pathlib, datetime
+          def command(args):
+              try:
+                  p=subprocess.run(args,capture_output=True,text=True,timeout=15)
+                  return {'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr}
+              except Exception as e: return {'error':str(e)}
+          def read(path):
+              p=pathlib.Path(path)
+              return p.read_text() if p.exists() else None
+          resolv=pathlib.Path('/etc/resolv.conf')
+          paths=['/etc/systemd/resolved.conf.d','/run/systemd/resolved.conf.d','/usr/lib/systemd/resolved.conf.d']
+          data={
+              'timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'image_os':os.environ.get('ImageOS'),'image_version':os.environ.get('ImageVersion'),
+              'resolv_conf':read(str(resolv)),
+              'resolv_conf_link':os.readlink(resolv) if resolv.is_symlink() else None,
+              'dropins':{str(p):p.read_text() for folder in paths for p in pathlib.Path(folder).glob('*.conf')},
+              'resolved_config':command(['systemd-analyze','cat-config','systemd/resolved.conf']),
+              'resolver_status':command(['resolvectl','status']),
+              'services':{unit:command(['systemctl','show',unit,'-p','LoadState','-p','ActiveState','-p','SubState','-p','MainPID']) for unit in ['egress-dns-resolver.service','egress-outbound-proxy.service']},
+              'binary_hashes':command(['sha256sum','/opt/hca/dns-resolver','/opt/hca/outbound-proxy']),
+              'listeners':command(['sudo','ss','-lntup']),
+              'region_metadata':command(['curl','-fsS','--noproxy','*','--connect-timeout','2','--max-time','3','-H','Metadata:true','http://169.254.169.254/metadata/instance/compute/location?api-version=2021-02-01&format=text'])
+          }
+          output=json.dumps(data,indent=2)
+          pathlib.Path('evidence/native-dns.json').write_text(output)
+          print(output)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('Native runner state only: no Harden-Runner, proxy startup, or DNS changes.\n\n```json\n'+output+'\n```\n')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-${{ matrix.os }}-${{ matrix.sample }}
+          path: evidence/
+          retention-days: 30
