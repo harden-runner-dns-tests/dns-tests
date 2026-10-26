@@ -92,3 +92,14 @@ Successful jobs: [eastus](https://github.com/harden-runner-dns-tests/dns-tests/a
 Scope: both successful samples used HCA `20261012.601` and the explicitly recreated clearing drop-in after running James's script. Neither was a live westus2 experiment host. The controls used newer HCA `20261021.618` and script-created drop-ins. VMs were independently allocated. These results establish that the combined revert restores the tested Community behavior in the constructed setup; they do not establish coverage for all images, containers, longer jobs, or future reapplication by GitHub.
 
 Re-run using **Actions → Test reverting GitHub DNS and proxy setup → Run workflow** (`full-revert.yml`). The full-revert cases explicitly fail if the pre-recovery allowed/denied checks fail. This is test-repository code, not a change to the released Community agent, and no automatic cleanup integration for a production workaround is claimed.
+
+## Native westus2 status on October 26
+
+At approximately **22:33 UTC / 3:33 PM PDT on October 26, 2026**, both westus2 samples in [read-only run 40413258978](https://github.com/harden-runner-dns-tests/dns-tests/actions/runs/40413258978) still had the observed experiment configuration. This workflow did not run Harden-Runner, James's script, or any DNS/proxy modification commands.
+
+- [ubuntu-latest westus2 job](https://github.com/harden-runner-dns-tests/dns-tests/actions/runs/40413258978/job/121889054863)
+- [ubuntu-26.04 westus2 job](https://github.com/harden-runner-dns-tests/dns-tests/actions/runs/40413258978/job/121889054998)
+
+Both had `/etc/resolv.conf` listing `127.0.0.100` first, `/etc/systemd/resolved.conf.d/90-egress-proxy.conf` containing `[Resolve]` and empty `DNS=`, and both `egress-dns-resolver.service` and `egress-outbound-proxy.service` active/running. Both reported HCA `20261021.618`.
+
+Of 16 sampled jobs, two landed in westus2 and both had these indicators. The other 14 did not. This confirms that the configuration had not been fully reverted in westus2 at the observation time; it does not establish what fraction of that region is affected or whether proxy interception rules have changed. All diagnostic jobs completed.
