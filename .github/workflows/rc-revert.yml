@@ -1,0 +1,90 @@
+name: Validate rc automatic DNS revert
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare:
+    name: ${{ matrix.os }} / ${{ matrix.setup }} / sample ${{ matrix.sample }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        setup: [native, dropin-control]
+        sample: [1, 2]
+    steps:
+      - name: Configure and inspect DNS before Harden-Runner's pre-step
+        uses: harden-runner-dns-tests/dns-tests/.github/actions/prepare@main
+        env:
+          DNS_TEST_SETUP: ${{ matrix.setup }}
+      - name: Recover pre-step evidence
+        if: always()
+        run: cp -a "$RUNNER_TEMP/dns-repro/evidence" ./evidence
+      - name: Harden Runner Community block mode
+        id: harden
+        uses: step-security/harden-runner@rc
+        with:
+          egress-policy: block
+          allowed-endpoints: >-
+            github.com:443
+            api.github.com:443
+            proxy.golang.org:443
+          disable-sudo: false
+      - name: Capture DNS and probe allowed and denied traffic
+        if: always()
+        run: |
+          bash "$RUNNER_TEMP/dns-repro/snapshot.sh" after-harden |& tee evidence/after-harden.txt
+          bash "$RUNNER_TEMP/dns-repro/probe.sh" after-harden |& tee evidence/probe-after-harden.txt
+          sleep 30
+          bash "$RUNNER_TEMP/dns-repro/snapshot.sh" after-delay |& tee evidence/after-delay.txt
+          bash "$RUNNER_TEMP/dns-repro/probe.sh" after-delay |& tee evidence/probe-after-delay.txt
+          sudo journalctl -u agent.service --no-pager | tee evidence/agent-journal.txt
+          sudo cat /home/agent/agent.log | tee evidence/agent.log
+          sudo cat /home/agent/agent.json | tee evidence/agent.json
+          sudo journalctl -u egress-outbound-proxy -u egress-dns-resolver --no-pager | tee evidence/proxy-journal.txt
+          {
+            echo '### DNS reproduction evidence'
+            echo 'Harden step outcome: ${{ steps.harden.outcome }}'
+            echo 'Diagnostic completion does not mean compatibility passed. See each curl exit code.'
+            echo 'github.com, api.github.com, proxy.golang.org are allowed; example.com is deliberately denied.'
+            echo '```text'
+            cat evidence/results.tsv
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Classify measured results
+        id: verdict
+        if: always()
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import json
+          p=Path('evidence/results.tsv')
+          rows=[line.split('\t') for line in p.read_text().splitlines() if line.startswith(('after-harden\t','after-delay\t'))] if p.exists() else []
+          allowed=[r for r in rows if r[1] != 'example.com']
+          denied=[r for r in rows if r[1] == 'example.com']
+          result={'allowed_pass':len(allowed)==18 and all(r[3]=='0' for r in allowed), 'denied_blocked':len(denied)==6 and all(r[3]!='0' for r in denied), 'rows':rows}
+          with open(__import__('os').environ['GITHUB_OUTPUT'],'a') as f: f.write('passed='+str(result['allowed_pass'] and result['denied_blocked']).lower()+'\n')
+          print(json.dumps(result,indent=2))
+          Path('evidence/verdict.json').write_text(json.dumps(result,indent=2))
+          with open(__import__('os').environ['GITHUB_STEP_SUMMARY'],'a') as f: f.write('\nMeasured verdict (before recovery): '+json.dumps(result)+'\n')
+          PYCODE
+      - name: Restore connectivity after all measurements
+        if: always() && steps.verdict.outputs.passed != 'true'
+        run: |
+          echo 'RECOVERY ONLY: allow outbound IPv4 after snapshots/probes, so evidence and runner status can upload.'
+          sudo iptables -I OUTPUT 1 -j ACCEPT
+          sudo iptables -I FORWARD 1 -j ACCEPT
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dns-${{ matrix.os }}-${{ matrix.setup }}-${{ matrix.sample }}
+          path: evidence/
+          retention-days: 14
+      - name: Require rc connectivity and enforcement
+        if: always()
+        env:
+          MEASURED_PASS: ${{ steps.verdict.outputs.passed }}
+        run: test "$MEASURED_PASS" = true
